@@ -12,10 +12,10 @@ import argparse
 
 parser = argparse.ArgumentParser(description='')
 parser.add_argument('--category', type=str, choices=['all', 'sexual'], required=True)
-parser.add_argument('--strength', type=str, choices=['medium', 'strong', 'max'], required=True)
+parser.add_argument('--strength', type=str, choices=['medium', 'strong', 'max'], default='strong')
 parser.add_argument("--safe", default=False, action="store_true")
 parser.add_argument("--model_name", default="CompVis/stable-diffusion-v1-4", type=str)
-parser.add_argument('--version', '-v', type=str, choices=['v1', 'v2'], required=True)
+parser.add_argument('--version', '-v', type=str, choices=['v1', 'v2'], default='v2')
 parser.add_argument("--debug", default=False, action="store_true")
 
 args = parser.parse_args()

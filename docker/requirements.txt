@@ -1,0 +1,13 @@
+diffusers
+git+https://github.com/huggingface/transformers
+scipy
+ftfy
+jupyter
+ipywidgets
+rtpt
+nudenet
+onnx2pytorch
+datasets
+opencv-python==4.5.5.64
+opencv-python-headless==4.5.5.64
+scikit-image
