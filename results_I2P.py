@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 
 parser = argparse.ArgumentParser(description='')
-parser.add_argument('--csv', type=str, default='/workspace/efm/runs/sexual_safe/1681433655.csv', required=True)
+parser.add_argument('--csv', type=str, default='/workspace/i2p/runs/1681433655.csv', required=True)
 
 args = parser.parse_args()
 

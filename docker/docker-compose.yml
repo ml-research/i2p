@@ -8,8 +8,8 @@ services:
      context: .
      dockerfile: Dockerfile
     volumes:
-      - <this_repo>:/workspace/efm/
-      - <this_repo>/checkpoints/nudenet:/root/.NudeNet
+      - <path_to_i2p_repo>:/workspace/i2p/
+      - <path_to_i2p_repo>/models/vision/paella_adaptions:/workspace/i2p/Paella/utils
     entrypoint: zsh
     stdin_open: true
     tty: true

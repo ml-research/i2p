@@ -11,3 +11,7 @@ datasets
 opencv-python==4.5.5.64
 opencv-python-headless==4.5.5.64
 scikit-image
+open_clip_torch
+warmup_scheduler
+git+https://github.com/pabloppp/pytorch-tools
+git+https://github.com/pabloppp/Arroz-Con-Cosas
