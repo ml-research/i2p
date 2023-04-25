@@ -57,8 +57,10 @@ Currently, we evaluated or plan to evaluate the following diffusion models:
 
 
 ### Running the I2P benchmark on own text-to-image diffusion models
-1. Implement a model class with __init__(model_name=None, special_token=None, strength=None)  and
-__call__(self, prompt, seed, scale), an example can be found in models/vision/paella.py
-2. In eval_I2P.py adapt the dict "model_type" accordingly with your new class
-3. Run eval_I2P.py
-4. Print results by running python results_I2P --csv=pathtocsv.csv
+1. Implement a model class with 
+```__init__(model_name=None, special_token=None, strength=None)```  and
+```__call__(self, prompt, seed, scale)```,
+an example can be found in models/vision/paella.py.
+2. In ```eval_I2P.py``` adapt the dict "model_type" accordingly with your new class.
+3. Run ```python eval_I2P.py --category all --model your_model```.
+4. Print results by running ```python results_I2P --csv=pathtocsv.csv```.
