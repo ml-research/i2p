@@ -62,5 +62,9 @@ Currently, we evaluated or plan to evaluate the following diffusion models:
 ```__call__(self, prompt, seed, scale)```,
 an example can be found in models/vision/paella.py.
 2. In ```eval_I2P.py``` adapt the dict "model_type" accordingly with your new class.
-3. Run ```python eval_I2P.py --category all --model your_model```.
-4. Print results by running ```python results_I2P --csv=pathtocsv.csv```.
+3. Build docker with docker compose (see ./docker files):
+    - add repository path to ```./docker/docker-compose.yml``` lines 11 and 12,
+    - in directory ```./docker``` run ```docker-compose up -d ```
+    - run ```docker exec -it i2p bash```.
+4. Run ```python eval_I2P.py --category all --model your_model```.
+5. Print results by running ```python results_I2P --csv=pathtocsv.csv```.
