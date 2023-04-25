@@ -17,7 +17,7 @@ import argparse
 parser = argparse.ArgumentParser(description='')
 parser.add_argument('--category', type=str, choices=['all', 'sexual'], required=True)
 parser.add_argument('--strength', type=str, choices=['medium', 'strong', 'max'], default='strong', required=False)
-parser.add_argument("--model_name", default="CompVis/stable-diffusion-v1-4", type=str)
+parser.add_argument("--model_name", required=False, type=str)
 parser.add_argument('--model', '-m', type=str, choices=['sd', 'ssdv1', 'ssdv2', 'altdiffusion', 'paella'],
                     required=True)
 parser.add_argument("--debug", default=False, action="store_true")
