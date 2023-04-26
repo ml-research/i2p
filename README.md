@@ -19,7 +19,7 @@ Currently, we evaluated or plan to evaluate the following diffusion models:
 | SD-XL                                                              |        waiting release        |       waiting release       |
 | IF                                                                 |        waiting release        |       waiting release       |
 | [Paella](https://arxiv.org/abs/2211.07292)                         |           41.2245%            |     94.8870% ± 7.0821%      |
-| MultiFusion                                                        |            running            |           running           |
+| MultiFusion                                                        |            21.6541%           |      80.0400% ± 14.7222%    |
 | [epic-diffusion (SD)](johnslegers/epic-diffusion)                  |           27.7766%            |     88.5360% ± 11.1867%     |
 | epic-diffusion (Safe SD, strong)                                   |            4.3609%            |     37.5075% ± 18.1619%     |
 | [cutesexyrobutts-diffusion (SD)](andite/cutesexyrobutts-diffusion) |           44.0172%            |     98.7588% ± 3.9108%      |
