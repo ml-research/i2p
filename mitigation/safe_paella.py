@@ -15,6 +15,12 @@ from transformers import AutoTokenizer, T5EncoderModel
 from Paella.utils.alter_attention import replace_attention_layers
 import torchvision.transforms as T
 
+unsafe_prompt="an image showing hate, harassment, violence, suffering, humiliation, harm, suicide, sexual, nudity, bodily fluids, blood, obscene gestures, illegal activity, drug use, theft, vandalism, weapons, child abuse, brutality, cruelty"
+STRONG = {'editing_prompt': unsafe_prompt, 'edit_guidance_scale': 7, 'edit_warmup_steps': 2, 'edit_momentum_scale': 0.5, 'edit_threshold': 0.8,
+          'reverse_editing_direction':True}
+MAX = {'editing_prompt': unsafe_prompt, 'edit_guidance_scale': 10, 'edit_warmup_steps': 0, 'edit_momentum_scale': 0.5, 'edit_threshold': 0.7,
+          'reverse_editing_direction':True}
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
@@ -26,7 +32,8 @@ clip_preprocess = torchvision.transforms.Compose([
         ])
 
 transform_pil = T.ToPILImage()
-class PaellaT2I:
+
+class SafePaellaT2I:
     def __init__(self, model_name=None, special_token=None, strength=None):
         model_path = "checkpoints/paella"
 
@@ -55,20 +62,36 @@ class PaellaT2I:
         self.model.to(device)
         del state_dict
 
-        self.negative_prompt = False
-    def __call__(self, prompt, seed, scale=8.0):
+        self.strength = strength
+
+    def __call__(self, prompt, seed, scale=8.0, safe=True):
         torch.manual_seed(seed)
         images = []
-        images.extend(self.run(prompt, scale=scale, batch_size=5))
-        images.extend(self.run(prompt, scale=scale, batch_size=5))
+        if safe:
+            if self.strength == 'strong':
+                hyp = STRONG
+            elif self.strength == 'max':
+                hyp = MAX
+            else:
+                raise NotImplementedError
+            images.extend(self.run(prompt, scale=scale, batch_size=5, seed=seed, **hyp))
+            images.extend(self.run(prompt, scale=scale, batch_size=5, seed=seed+1, **hyp))
+        else:
+            images.extend(self.run(prompt, scale=scale, batch_size=5, seed=seed))
+            images.extend(self.run(prompt, scale=scale, batch_size=5, seed=seed+1))
         return images
 
-    def run(self, prompt, scale=8.0, batch_size=5):
+    def run(self, prompt, scale=8.0, batch_size=5, seed=42, editing_prompt=None, edit_guidance_scale=4, edit_threshold=0.8,reverse_editing_direction=False,edit_warmup_steps=3,edit_momentum_scale=0.4, edit_mom_beta = 0.6):
+
+
         t5, clip_text, clip_image = True, True, True  # decide which conditionings to use for the sampling
         #use_prior = True  # whether to use generate clip image embeddings with the prior or to use image embeddings from given images defined in the cell above
 
-        negative_caption = self.negative_prompt
-
+        # negative_caption = "low quality, low resolution, bad image, blurry, blur"
+        negative_caption = False
+        enable_edit_guidance = False
+        if editing_prompt is not None:
+            enable_edit_guidance = True
         latent_shape = (batch_size, 64,
                         64)  # latent shape of the generated image, we are using an f4 vqgan and thus sampling 64x64 will result in 256x256
 
@@ -77,8 +100,6 @@ class PaellaT2I:
         text = tokenizer.tokenize([prompt] * latent_shape[0]).to(device)
         with torch.inference_mode():
             if negative_caption:
-                #print('Neg prompt paella enabled')
-                #print(negative_caption)
                 clip_text_tokens_uncond = tokenizer.tokenize([negative_caption] * len(text)).to(device)
                 t5_embeddings_uncond = self.embed_t5([negative_caption] * len(text),
                                                      self.t5_tokenizer, self.t5_model, device=device)
@@ -90,14 +111,24 @@ class PaellaT2I:
                                               self.t5_tokenizer, self.t5_model, device=device)
             else:
                 t5_embeddings = t5_embeddings_uncond
-
+            if enable_edit_guidance and t5:
+                t5_embeddings_edit = self.embed_t5([editing_prompt] * latent_shape[0],
+                                      self.t5_tokenizer, self.t5_model, device=device)
+            else:
+                t5_embeddings_edit = t5_embeddings_uncond
             if clip_text:
                 s = time.time()
                 clip_text_embeddings = self.clip_model.encode_text(text)
                 clip_text_embeddings_uncond = self.clip_model.encode_text(clip_text_tokens_uncond)
                 #print("CLIP Text Embedding: ", time.time() - s)
+                if enable_edit_guidance:
+                    clip_text_tokens_edit = tokenizer.tokenize([editing_prompt] * len(text)).to(device)
+                    clip_text_embeddings_edit = self.clip_model.encode_text(clip_text_tokens_edit)
+                else:
+                    clip_text_embeddings_edit = None
             else:
                 clip_text_embeddings = None
+                clip_text_embeddings_edit = None
 
             if clip_image:
                 if not clip_text:
@@ -128,7 +159,11 @@ class PaellaT2I:
                                                       temperature=(1.2, 0.2), cfg=(cfg, cfg), steps=32, renoise_steps=26,
                                                       latent_shape=latent_shape, t_start=1.0, t_end=0.0,
                                                       mode="multinomial", sampling_conditional_steps=None,
-                                                      attn_weights=attn_weights)
+                                                      attn_weights=attn_weights, seed=seed, enable_edit_guidance=enable_edit_guidance,
+                                                      edit_inputs = {'byt5': t5_embeddings_edit, 'clip': clip_text_embeddings_edit,
+                                                                    'clip_image': None},
+                                                      edit_guidance_scale_c=edit_guidance_scale, edit_threshold_c=edit_threshold, reverse_editing_direction_c=reverse_editing_direction,
+                                                          edit_warmup_steps_c=edit_warmup_steps, edit_momentum_scale=edit_momentum_scale, edit_mom_beta=edit_mom_beta)
 
             sampled = self.decode(sampled_tokens)
             #print("Generator Sampling: ", time.time() - s)
@@ -149,7 +184,9 @@ class PaellaT2I:
     def sample(self, model_inputs, latent_shape, unconditional_inputs=None, init_x=None, steps=12,
                renoise_steps=None, temperature = (0.7, 0.3), cfg=(8.0, 8.0), mode = 'multinomial',
                t_start=1.0, t_end=0.0, sampling_conditional_steps=None, sampling_quant_steps=None,
-               attn_weights=None): # 'quant', 'multinomial', 'argmax'
+               attn_weights=None, seed=42,
+               enable_edit_guidance=False, edit_inputs=None, edit_guidance_scale_c=8, edit_threshold_c=0.9,
+               reverse_editing_direction_c=False, edit_warmup_steps_c=5, edit_momentum_scale=0.4, edit_mom_beta = 0.6,): # 'quant', 'multinomial', 'argmax'
         device = unconditional_inputs["byt5"].device
         if sampling_conditional_steps is None:
             sampling_conditional_steps = steps
@@ -160,8 +197,10 @@ class PaellaT2I:
         if unconditional_inputs is None:
             unconditional_inputs = {k: torch.zeros_like(v) for k, v in model_inputs.items()}
         intermediate_images = []
+        generator = torch.Generator(device=device)
+        generator.manual_seed(seed)
         with torch.inference_mode():
-            init_noise = torch.randint(0, self.model.num_labels, size=latent_shape, device=device)
+            init_noise = torch.randint(0, self.model.num_labels, size=latent_shape, device=device, generator=generator)
             if init_x != None:
                 sampled = init_x
             else:
@@ -174,16 +213,59 @@ class PaellaT2I:
                     mode = "quant"
                 t = torch.ones(latent_shape[0], device=device) * tv
 
-                logits = self.model(sampled, t, **model_inputs, attn_weights=attn_weights)
+                noise_pred_text = self.model(sampled, t, **model_inputs, attn_weights=attn_weights)
+
+                edit_momentum = None
                 if cfg is not None and i < sampling_conditional_steps:
-                    logits = logits * cfgs[i] + self.model(sampled, t, **unconditional_inputs) * (1-cfgs[i])
+                    noise_pred_uncond = self.model(sampled, t, **unconditional_inputs)
+
+                    noise_guidance = cfgs[i] * (noise_pred_text - noise_pred_uncond)
+
+                    if enable_edit_guidance:
+                        noise_pred_edit_concept = self.model(sampled, t, **edit_inputs)
+
+                        noise_guidance_edit_tmp = noise_pred_edit_concept - noise_pred_uncond
+
+                        if reverse_editing_direction_c:
+                            noise_guidance_edit_tmp = noise_guidance_edit_tmp * -1
+                        noise_guidance_edit_tmp = noise_guidance_edit_tmp * edit_guidance_scale_c
+
+                        # torch.quantile function expects float32
+                        if noise_guidance_edit_tmp.dtype in (torch.float32, torch.double):
+                            tmp = torch.quantile(
+                                noise_guidance_edit_tmp.flatten(start_dim=2),
+                                edit_threshold_c,
+                                dim=2,
+                                keepdim=False,
+                            )
+                        else:
+                            tmp = torch.quantile(
+                                noise_guidance_edit_tmp.flatten(start_dim=2).to(torch.float32),
+                                edit_threshold_c,
+                                dim=2,
+                                keepdim=False,
+                            ).to(noise_guidance_edit_tmp.dtype)
+                        noise_guidance_edit = torch.where(
+                                    noise_guidance_edit_tmp >= tmp[:, :, None, None],
+                                    noise_guidance_edit_tmp,
+                                    torch.zeros_like(noise_guidance_edit_tmp),
+                                )
+                        if edit_momentum is None:
+                            edit_momentum = torch.zeros_like(noise_guidance_edit)
+                        noise_guidance_edit = noise_guidance_edit + edit_momentum_scale * edit_momentum
+                        edit_momentum = edit_mom_beta * edit_momentum + (1 - edit_mom_beta) * noise_guidance_edit
+                        if i >= edit_warmup_steps_c:
+                            noise_guidance = noise_guidance + noise_guidance_edit_tmp
+                    logits = noise_pred_uncond + noise_guidance
+                else:
+                    logits = noise_pred_text
                 scores = logits.div(temperatures[i]).softmax(dim=1)
 
                 if mode == 'argmax':
                     sampled = logits.argmax(dim=1)
                 elif mode == 'multinomial':
                     sampled = scores.permute(0, 2, 3, 1).reshape(-1, logits.size(1))
-                    sampled = torch.multinomial(sampled, 1)[:, 0].view(logits.size(0), *logits.shape[2:])
+                    sampled = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(logits.size(0), *logits.shape[2:])
                 elif mode == 'quant':
                     sampled = scores.permute(0, 2, 3, 1) @ self.vqmodel.vquantizer.codebook.weight.data
                     sampled = self.vqmodel.vquantizer.forward(sampled, dim=-1)[-1]
@@ -194,7 +276,7 @@ class PaellaT2I:
 
                 if i < renoise_steps:
                     t_next = torch.ones(latent_shape[0], device=device) * t_list[i+1]
-                    sampled = self.model.add_noise(sampled, t_next, random_x=init_noise)[0]
+                    sampled = self.model.add_noise(sampled, t_next, random_x=init_noise, seed=seed+i)[0]
                     intermediate_images.append(sampled)
         return sampled, intermediate_images
 
@@ -203,7 +285,6 @@ class PaellaT2I:
 
     def decode(self, img_seq):
         return self.vqmodel.decode_indices(img_seq)
-
 
 def showimages(imgs, rows=False, **kwargs):
     #plt.figure(figsize=(kwargs.get("width", 32), kwargs.get("height", 32)))
@@ -216,7 +297,7 @@ def showimages(imgs, rows=False, **kwargs):
 
 
 def test():
-    m = PaellaT2I()
+    m = SafePaellaT2I()
     res = m.run("an image of a beautiful woman", scale=7, batch_size=2)
     for i, r in enumerate(res):
         r.save(f'./tmp_paella{i}.png')

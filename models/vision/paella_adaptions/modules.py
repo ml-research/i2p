@@ -1,7 +1,7 @@
-import math
 import torch
-import numpy as np
 from torch import nn
+import numpy as np
+import math
 
 
 class Attention2D(nn.Module):
@@ -9,12 +9,12 @@ class Attention2D(nn.Module):
         super().__init__()
         self.attn = torch.nn.MultiheadAttention(c, nhead, dropout=dropout, bias=True, batch_first=True)
 
-    def forward(self, x, kv, self_attn=False):
+    def forward(self, x, kv, self_attn=False, **kwargs):
         orig_shape = x.shape
-        x = x.view(x.size(0), x.size(1), -1).permute(0, 2, 1)
+        x = x.view(x.size(0), x.size(1), -1).permute(0, 2, 1)  # Bx4xHxW -> Bx(HxW)x4
         if self_attn:
             kv = torch.cat([x, kv], dim=1)
-        x = self.attn(x, kv, kv, need_weights=False)[0]
+        x = self.attn(x, kv, kv, need_weights=False, **kwargs)[0]
         x = x.permute(0, 2, 1).view(*orig_shape)
         return x
 
@@ -73,9 +73,9 @@ class AttnBlock(nn.Module):
             nn.Linear(c_cond, c)
         )
 
-    def forward(self, x, kv):
+    def forward(self, x, kv, **kwargs):
         kv = self.kv_mapper(kv)
-        x = x + self.attention(self.norm(x), kv, self_attn=self.self_attn)
+        x = x + self.attention(self.norm(x), kv, self_attn=self.self_attn, **kwargs)
         return x
 
 
@@ -145,7 +145,7 @@ class Paella(nn.Module):
             else:
                 raise Exception(f'Block type {block_type} not supported')
 
-        # DOWN BLOCKS
+        # DOWN BLOCK
         self.down_blocks = nn.ModuleList()
         for i in range(len(c_hidden)):
             down_block = nn.ModuleList()
@@ -187,13 +187,13 @@ class Paella(nn.Module):
         )
 
         # --- WEIGHT INIT ---
-        self.apply(self._init_weights)  # General init
+        self.apply(self._init_weights)
         nn.init.normal_(self.byt5_mapper.weight, std=0.02)
         nn.init.normal_(self.clip_mapper.weight, std=0.02)
         nn.init.normal_(self.clip_image_mapper.weight, std=0.02)
-        torch.nn.init.xavier_uniform_(self.embedding[1].weight, 0.02)
-        nn.init.constant_(self.clf[1].weight, 0)
-        nn.init.normal_(self.in_mapper[0].weight, std=np.sqrt(1 / num_labels))
+        torch.nn.init.xavier_uniform_(self.embedding[1].weight, 0.02)  # inputs
+        nn.init.constant_(self.clf[1].weight, 0)  # outputs
+        nn.init.normal_(self.in_mapper[0].weight, std=np.sqrt(1 / num_labels))  # out mapper
         self.out_mapper[-1].weight.data = self.in_mapper[0].weight.data[:, :, None, None].clone()
 
         for level_block in self.down_blocks + self.up_blocks:
@@ -216,7 +216,7 @@ class Paella(nn.Module):
         emb = torch.arange(half_dim, device=r.device).float().mul(-emb).exp()
         emb = r[:, None] * emb[None, :]
         emb = torch.cat([emb.sin(), emb.cos()], dim=1)
-        if self.c_r % 2 == 1:
+        if self.c_r % 2 == 1:  # zero pad
             emb = nn.functional.pad(emb, (0, 1), mode='constant')
         return emb
 
@@ -226,19 +226,24 @@ class Paella(nn.Module):
             clip = self.clip_mapper(clip).view(clip.size(0), -1, self.c_cond)
             seq = torch.cat([seq, clip], dim=1)
         if clip_image is not None:
-            clip_image = self.clip_image_mapper(clip_image).view(clip_image.size(0), -1, self.c_cond)
-            seq = torch.cat([seq, clip_image], dim=1)
+            if isinstance(clip_image, list):
+                for ci in clip_image:
+                    ci = self.clip_image_mapper(ci).view(ci.size(0), -1, self.c_cond)
+                    seq = torch.cat([seq, ci], dim=1)
+            else:
+                clip_image = self.clip_image_mapper(clip_image).view(clip_image.size(0), -1, self.c_cond)
+                seq = torch.cat([seq, clip_image], dim=1)
         seq = self.seq_norm(seq)
         return seq
 
-    def _down_encode(self, x, r_embed, c_embed):
+    def _down_encode(self, x, r_embed, c_embed, **kwargs):
         level_outputs = []
         for down_block in self.down_blocks:
             for block in down_block:
                 if isinstance(block, ResBlock):
                     x = block(x)
                 elif isinstance(block, AttnBlock):
-                    x = block(x, c_embed)
+                    x = block(x, c_embed, **kwargs)
                 elif isinstance(block, TimestepBlock):
                     x = block(x, r_embed)
                 else:
@@ -246,21 +251,21 @@ class Paella(nn.Module):
             level_outputs.insert(0, x)
         return level_outputs
 
-    def _up_decode(self, level_outputs, r_embed, c_embed):
+    def _up_decode(self, level_outputs, r_embed, c_embed, **kwargs):
         x = level_outputs[0]
         for i, up_block in enumerate(self.up_blocks):
             for j, block in enumerate(up_block):
                 if isinstance(block, ResBlock):
                     x = block(x, level_outputs[i] if j == 0 and i > 0 else None)
                 elif isinstance(block, AttnBlock):
-                    x = block(x, c_embed)
+                    x = block(x, c_embed, **kwargs)
                 elif isinstance(block, TimestepBlock):
                     x = block(x, r_embed)
                 else:
                     x = block(x)
         return x
 
-    def forward(self, x, r, byt5, clip=None, clip_image=None, x_cat=None):
+    def forward(self, x, r, byt5, clip=None, clip_image=None, x_cat=None, **kwargs):
         if x_cat is not None:
             x = torch.cat([x, x_cat], dim=1)
         # Process the conditioning embeddings
@@ -269,8 +274,8 @@ class Paella(nn.Module):
 
         # Model Blocks
         x = self.embedding(self.in_mapper(x).permute(0, 3, 1, 2))
-        level_outputs = self._down_encode(x, r_embed, c_embed)
-        x = self._up_decode(level_outputs, r_embed, c_embed)
+        level_outputs = self._down_encode(x, r_embed, c_embed, **kwargs)
+        x = self._up_decode(level_outputs, r_embed, c_embed, **kwargs)
         x = self.out_mapper(self.clf(x))
         return x
 
@@ -283,3 +288,6 @@ class Paella(nn.Module):
             random_x = torch.randint_like(x, 0, self.num_labels)
         x = x * (1 - mask) + random_x * mask
         return x, mask
+
+    def get_loss_weight(self, t, mask, min_val=0.3):
+        return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None, None]

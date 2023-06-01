@@ -29,7 +29,3 @@ class SSD:
             images.extend(out.images)
         return images
 
-
-
-
-
